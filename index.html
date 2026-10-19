@@ -8,8 +8,8 @@
 <title>Visor · detección en vivo</title>
 <style>
   :root {
-    --face: #FFD60A;
-    --body: #2FE6D2;
+    --face: #00FF00;
+    --body: #FFFFFF;
     --obj:  #FF3B6B;
     --ui-bg: rgba(18,18,18,.62);
     --ui-line: rgba(255,255,255,.14);
@@ -65,6 +65,7 @@
   /* Overlays */
   .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 18px; padding: 24px; text-align: center; background: #000; z-index: 10; }
+  .screen .logo { width: min(92vw, 560px); height: auto; display: block; }
   .screen h1 { font: 700 30px/1.1 var(--mono); letter-spacing: .02em; margin: 0; text-transform: uppercase; }
   .screen h1 b { color: var(--obj); }
   .screen p { margin: 0; color: var(--dim); max-width: 320px; line-height: 1.45; font-size: 15px; }
@@ -112,8 +113,8 @@
   </div>
 
   <div class="screen" id="start">
-    <h1>Visor<b>.</b></h1>
-    <p>Detecta caras, cuerpos y objetos en vivo con la cámara, y graba el vídeo con las detecciones encima.</p>
+    <img class="logo" src="logo.jpg" alt="Voll-Damm · Visor">
+    <p>Detector de especímenes, objetos y caras.</p>
     <div class="legend">
       <span style="--c:var(--face)">Caras</span><span style="--c:var(--body)">Cuerpos</span><span style="--c:var(--obj)">Objetos</span>
     </div>
@@ -141,7 +142,7 @@ const MODELS = {
   obj:  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
 };
 
-const COLORS = { face: "#FFD60A", body: "#2FE6D2", obj: "#FF3B6B" };
+const COLORS = { face: "#00FF00", body: "#FFFFFF", obj: "#FF3B6B" };
 
 const ES = {
   bicycle:"bici", car:"coche", motorcycle:"moto", airplane:"avión", bus:"autobús", train:"tren", truck:"camión",
@@ -160,6 +161,9 @@ const ES = {
 };
 
 // Pose landmarks around the hands: wrists, pinkies, index fingers, thumbs
+// Any kind of glass or cup is labelled "UNA VOLL"
+const GLASSES = ["cup", "wine glass"];
+
 const HAND_POINTS = [15, 16, 17, 18, 19, 20, 21, 22];
 
 const $ = id => document.getElementById(id);
@@ -193,7 +197,7 @@ async function loadModels() {
   const [face, pose, obj] = await Promise.all([
     createTask(FaceDetector, { baseOptions: { modelAssetPath: MODELS.face }, runningMode: "VIDEO", minDetectionConfidence: 0.5 }),
     createTask(PoseLandmarker, { baseOptions: { modelAssetPath: MODELS.pose }, runningMode: "VIDEO", numPoses: 3,
-      minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5 }),
+      minPoseDetectionConfidence: 0.65, minPosePresenceConfidence: 0.65, minTrackingConfidence: 0.5 }),
     createTask(ObjectDetector, { baseOptions: { modelAssetPath: MODELS.obj }, runningMode: "VIDEO",
       scoreThreshold: 0.35, maxResults: 8, categoryDenylist: ["person"] }),
   ]);
@@ -316,7 +320,8 @@ function draw(W, H, mirror) {
       const inHand = hands.some(p => p.x > b.x - pad && p.x < b.x + b.w + pad && p.y > b.y - pad && p.y < b.y + b.h + pad);
       if (inHand) held++;
       const cat = d.categories?.[0] ?? {};
-      const name = (ES[cat.categoryName] ?? cat.categoryName ?? "objeto").toUpperCase();
+      const isGlass = GLASSES.includes(cat.categoryName);
+      const name = isGlass ? "UNA VOLL" : (ES[cat.categoryName] ?? cat.categoryName ?? "objeto").toUpperCase();
       const s = Math.round((cat.score ?? 0) * 100);
       if (inHand) {
         ctx.fillStyle = "rgba(255,59,107,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h);
