@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Visor · detección en vivo</title>
+<style>
+  :root {
+    --face: #FFD60A;
+    --body: #2FE6D2;
+    --obj:  #FF3B6B;
+    --ui-bg: rgba(18,18,18,.62);
+    --ui-line: rgba(255,255,255,.14);
+    --txt: #F2F2F2;
+    --dim: #9A9A9A;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--txt);
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; overflow: hidden;
+    overscroll-behavior: none; touch-action: manipulation; }
+  #video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  #canvas { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+
+  /* Top HUD */
+  #hud { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between;
+    align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 10px) 14px 10px;
+    font: 600 12px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; pointer-events: none; }
+  .pill { background: var(--ui-bg); border: 1px solid var(--ui-line); border-radius: 999px; padding: 8px 12px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  #rec { display: none; color: #fff; background: #E0263F; border-color: transparent; }
+  #rec.on { display: inline-flex; align-items: center; gap: 7px; }
+  #rec.on::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+
+  /* Bottom controls */
+  #controls { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(env(safe-area-inset-bottom) + 18px);
+    display: flex; flex-direction: column; gap: 16px; align-items: center;
+    background: linear-gradient(to top, rgba(0,0,0,.65), rgba(0,0,0,0)); }
+  #toggles { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .tg { font: 600 13px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--dim);
+    background: var(--ui-bg); border: 1px solid var(--ui-line); border-radius: 999px; padding: 10px 14px;
+    display: inline-flex; align-items: center; gap: 8px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .tg i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; opacity: .5; }
+  .tg[aria-pressed="true"] { color: #fff; border-color: var(--c); }
+  .tg[aria-pressed="true"] i { background: var(--c); opacity: 1; box-shadow: 0 0 8px var(--c); }
+  #tg-face { --c: var(--face); } #tg-body { --c: var(--body); } #tg-obj { --c: var(--obj); }
+
+  #bar { width: 100%; max-width: 420px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+  .round { width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--ui-line); background: var(--ui-bg);
+    color: #fff; display: grid; place-items: center; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .round svg { width: 24px; height: 24px; }
+  #btn-mic { justify-self: start; } #btn-flip { justify-self: end; }
+  #btn-mic[aria-pressed="false"] { color: var(--dim); }
+  #btn-mic[aria-pressed="false"] .slash { display: block; } #btn-mic .slash { display: none; }
+  #btn-rec { width: 78px; height: 78px; border-radius: 50%; border: 4px solid #fff; background: transparent; padding: 5px; }
+  #btn-rec span { display: block; width: 100%; height: 100%; border-radius: 50%; background: #E0263F;
+    transition: all .2s ease; margin: auto; }
+  #btn-rec.on span { width: 46%; height: 46%; border-radius: 6px; }
+  button { cursor: pointer; font: inherit; }
+  button:disabled { opacity: .4; }
+
+  /* Overlays */
+  .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; padding: 24px; text-align: center; background: #000; z-index: 10; }
+  .screen h1 { font: 700 30px/1.1 var(--mono); letter-spacing: .02em; margin: 0; text-transform: uppercase; }
+  .screen h1 b { color: var(--obj); }
+  .screen p { margin: 0; color: var(--dim); max-width: 320px; line-height: 1.45; font-size: 15px; }
+  .cta { font: 700 15px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: #000; background: #fff;
+    border: 0; border-radius: 999px; padding: 18px 28px; }
+  .legend { display: flex; gap: 14px; font: 600 12px/1 var(--mono); text-transform: uppercase; color: var(--dim); }
+  .legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--c); }
+  #msg { font: 500 13px/1.4 var(--mono); color: var(--dim); min-height: 1.4em; }
+  #msg.err { color: #FF8A8A; }
+
+  #result { display: none; background: rgba(0,0,0,.94); }
+  #result.show { display: flex; }
+  #result video { width: 100%; max-width: 440px; max-height: 62vh; border-radius: 14px; background: #111; }
+  #result .row { display: flex; gap: 10px; }
+  .ghost { font: 700 14px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: #fff;
+    background: transparent; border: 1px solid var(--ui-line); border-radius: 999px; padding: 16px 22px; }
+  #result small { color: var(--dim); font: 500 12px/1.4 var(--mono); }
+</style>
+</head>
+<body>
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <span class="pill" id="fps">— FPS</span>
+    <span class="pill" id="rec">00:00</span>
+    <span class="pill" id="count">0 · 0 · 0</span>
+  </div>
+
+  <div id="controls">
+    <div id="toggles">
+      <button class="tg" id="tg-face" aria-pressed="true"><i></i>Caras</button>
+      <button class="tg" id="tg-body" aria-pressed="true"><i></i>Cuerpos</button>
+      <button class="tg" id="tg-obj"  aria-pressed="true"><i></i>Objetos</button>
+    </div>
+    <div id="bar">
+      <button class="round" id="btn-mic" aria-pressed="true" aria-label="Sonido">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><path class="slash" d="M4 4l16 16"/></svg>
+      </button>
+      <button id="btn-rec" aria-label="Grabar"><span></span></button>
+      <button class="round" id="btn-flip" aria-label="Cambiar cámara">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-3l-2-3H9L7 7H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1z"/><path d="M9 13a3 3 0 0 1 5-2.2M15 13a3 3 0 0 1-5 2.2"/><path d="M14 9v2h-2M10 17v-2h2"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="screen" id="start">
+    <h1>Visor<b>.</b></h1>
+    <p>Detecta caras, cuerpos y objetos en vivo con la cámara, y graba el vídeo con las detecciones encima.</p>
+    <div class="legend">
+      <span style="--c:var(--face)">Caras</span><span style="--c:var(--body)">Cuerpos</span><span style="--c:var(--obj)">Objetos</span>
+    </div>
+    <button class="cta" id="btn-start">Activar cámara</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="screen" id="result">
+    <video id="preview" controls playsinline></video>
+    <small id="result-info"></small>
+    <div class="row">
+      <button class="ghost" id="btn-discard">Descartar</button>
+      <button class="cta" id="btn-save">Guardar</button>
+    </div>
+  </div>
+
+<script type="module">
+import { FilesetResolver, FaceDetector, PoseLandmarker, ObjectDetector }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODELS = {
+  face: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+  pose: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  obj:  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
+};
+
+const COLORS = { face: "#FFD60A", body: "#2FE6D2", obj: "#FF3B6B" };
+
+const ES = {
+  bicycle:"bici", car:"coche", motorcycle:"moto", airplane:"avión", bus:"autobús", train:"tren", truck:"camión",
+  boat:"barco", "traffic light":"semáforo", "fire hydrant":"boca de riego", "stop sign":"stop", "parking meter":"parquímetro",
+  bench:"banco", bird:"pájaro", cat:"gato", dog:"perro", horse:"caballo", sheep:"oveja", cow:"vaca", elephant:"elefante",
+  bear:"oso", zebra:"cebra", giraffe:"jirafa", backpack:"mochila", umbrella:"paraguas", handbag:"bolso", tie:"corbata",
+  suitcase:"maleta", frisbee:"frisbi", skis:"esquís", snowboard:"snowboard", "sports ball":"balón", kite:"cometa",
+  "baseball bat":"bate", "baseball glove":"guante", skateboard:"skate", surfboard:"tabla de surf", "tennis racket":"raqueta",
+  bottle:"botella", "wine glass":"copa", cup:"vaso", fork:"tenedor", knife:"cuchillo", spoon:"cuchara", bowl:"bol",
+  banana:"plátano", apple:"manzana", sandwich:"bocadillo", orange:"naranja", broccoli:"brócoli", carrot:"zanahoria",
+  "hot dog":"perrito", pizza:"pizza", donut:"dónut", cake:"pastel", chair:"silla", couch:"sofá", "potted plant":"planta",
+  bed:"cama", "dining table":"mesa", toilet:"váter", tv:"tele", laptop:"portátil", mouse:"ratón", remote:"mando",
+  keyboard:"teclado", "cell phone":"móvil", microwave:"microondas", oven:"horno", toaster:"tostadora", sink:"fregadero",
+  refrigerator:"nevera", book:"libro", clock:"reloj", vase:"jarrón", scissors:"tijeras", "teddy bear":"peluche",
+  "hair drier":"secador", toothbrush:"cepillo de dientes",
+};
+
+// Pose landmarks around the hands: wrists, pinkies, index fingers, thumbs
+const HAND_POINTS = [15, 16, 17, 18, 19, 20, 21, 22];
+
+const $ = id => document.getElementById(id);
+const video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d");
+const msg = $("msg");
+
+const state = {
+  face: true, body: true, obj: true, mic: true,
+  facing: "environment", stream: null, micStream: null,
+  detectors: {}, results: { face: [], pose: [], obj: [] },
+  frame: 0, lastTs: 0, fpsT: performance.now(), fpsN: 0,
+  recorder: null, chunks: [], recStart: 0, blob: null, mime: "",
+};
+
+function say(text, err = false) { msg.textContent = text; msg.className = err ? "err" : ""; }
+
+// ---------- Models ----------
+async function createTask(Cls, options) {
+  const vision = state.vision;
+  try {
+    return await Cls.createFromOptions(vision, { ...options, baseOptions: { ...options.baseOptions, delegate: "GPU" } });
+  } catch (e) {
+    console.warn("GPU no disponible, usando CPU", e);
+    return await Cls.createFromOptions(vision, { ...options, baseOptions: { ...options.baseOptions, delegate: "CPU" } });
+  }
+}
+
+async function loadModels() {
+  say("Cargando modelos…");
+  state.vision = await FilesetResolver.forVisionTasks(WASM);
+  const [face, pose, obj] = await Promise.all([
+    createTask(FaceDetector, { baseOptions: { modelAssetPath: MODELS.face }, runningMode: "VIDEO", minDetectionConfidence: 0.5 }),
+    createTask(PoseLandmarker, { baseOptions: { modelAssetPath: MODELS.pose }, runningMode: "VIDEO", numPoses: 3,
+      minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5 }),
+    createTask(ObjectDetector, { baseOptions: { modelAssetPath: MODELS.obj }, runningMode: "VIDEO",
+      scoreThreshold: 0.35, maxResults: 8, categoryDenylist: ["person"] }),
+  ]);
+  state.detectors = { face, pose, obj };
+}
+
+// ---------- Camera ----------
+async function startCamera() {
+  if (state.stream) state.stream.getTracks().forEach(t => t.stop());
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+  });
+  state.stream = stream;
+  video.srcObject = stream;
+  await video.play();
+  await new Promise(r => video.readyState >= 2 ? r() : video.addEventListener("loadeddata", r, { once: true }));
+}
+
+function syncCanvasSize() {
+  const w = video.videoWidth, h = video.videoHeight;
+  if (w && h && (canvas.width !== w || canvas.height !== h)) { canvas.width = w; canvas.height = h; }
+}
+
+// ---------- Detection loop ----------
+function detect(ts) {
+  const d = state.detectors;
+  try {
+    if (state.face) state.results.face = d.face.detectForVideo(video, ts).detections;
+    else state.results.face = [];
+    // Pose also feeds the "in hand" check, so it runs when objects are on even if bodies are hidden
+    if (state.body || state.obj) state.results.pose = d.pose.detectForVideo(video, ts).landmarks;
+    else state.results.pose = [];
+    if (state.obj) {
+      if (state.frame % 2 === 0) state.results.obj = d.obj.detectForVideo(video, ts).detections;
+    } else state.results.obj = [];
+  } catch (e) { console.warn(e); }
+}
+
+function loop() {
+  if (video.readyState >= 2) {
+    syncCanvasSize();
+    const W = canvas.width, H = canvas.height, mirror = state.facing === "user";
+    ctx.save();
+    if (mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, 0, 0, W, H);
+    ctx.restore();
+
+    let ts = performance.now();
+    if (ts <= state.lastTs) ts = state.lastTs + 1;
+    state.lastTs = ts;
+    detect(ts);
+    draw(W, H, mirror);
+    state.frame++;
+
+    state.fpsN++;
+    if (ts - state.fpsT > 1000) {
+      $("fps").textContent = Math.round(state.fpsN * 1000 / (ts - state.fpsT)) + " FPS";
+      state.fpsT = ts; state.fpsN = 0;
+    }
+    if (state.recorder) {
+      const s = Math.floor((Date.now() - state.recStart) / 1000);
+      $("rec").textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+// ---------- Drawing ----------
+function draw(W, H, mirror) {
+  const u = Math.max(W, H) / 1000;           // scale unit
+  const fx = x => mirror ? W - x : x;        // mirror x for front camera
+  const box = b => ({ x: mirror ? W - b.originX - b.width : b.originX, y: b.originY, w: b.width, h: b.height });
+  const r = state.results;
+
+  // Bodies
+  if (state.body) {
+    r.pose.forEach((lms, i) => {
+      ctx.lineWidth = 3 * u; ctx.strokeStyle = COLORS.body; ctx.fillStyle = COLORS.body;
+      ctx.lineCap = "round";
+      for (const c of PoseLandmarker.POSE_CONNECTIONS) {
+        const a = lms[c.start], b = lms[c.end];
+        if ((a.visibility ?? 1) < .5 || (b.visibility ?? 1) < .5) continue;
+        ctx.beginPath(); ctx.moveTo(fx(a.x * W), a.y * H); ctx.lineTo(fx(b.x * W), b.y * H); ctx.stroke();
+      }
+      lms.forEach((p, k) => {
+        if ((p.visibility ?? 1) < .5 || k < 11) return; // skip face points, the face detector covers those
+        ctx.beginPath(); ctx.arc(fx(p.x * W), p.y * H, 4 * u, 0, Math.PI * 2); ctx.fill();
+      });
+      const vis = lms.filter(p => (p.visibility ?? 1) > .5);
+      if (vis.length) {
+        const top = vis.reduce((m, p) => p.y < m.y ? p : m, vis[0]);
+        const xs = vis.map(p => fx(p.x * W));
+        label(`CUERPO ${String(i + 1).padStart(2, "0")}`, Math.min(...xs), Math.max(0, top.y * H - 34 * u), COLORS.body, u, "#000");
+      }
+    });
+  }
+
+  // Faces
+  if (state.face) {
+    r.face.forEach(d => {
+      const b = box(d.boundingBox);
+      brackets(b, COLORS.face, u);
+      const s = Math.round((d.categories?.[0]?.score ?? 0) * 100);
+      label(`CARA ${s}%`, b.x, b.y - 30 * u, COLORS.face, u, "#000");
+    });
+  }
+
+  // Objects (+ in-hand check)
+  let held = 0;
+  if (state.obj) {
+    const hands = [];
+    r.pose.forEach(lms => HAND_POINTS.forEach(k => {
+      const p = lms[k];
+      if ((p.visibility ?? 1) > .4) hands.push({ x: fx(p.x * W), y: p.y * H });
+    }));
+    r.obj.forEach(d => {
+      const b = box(d.boundingBox);
+      const pad = Math.max(b.w, b.h) * .25;
+      const inHand = hands.some(p => p.x > b.x - pad && p.x < b.x + b.w + pad && p.y > b.y - pad && p.y < b.y + b.h + pad);
+      if (inHand) held++;
+      const cat = d.categories?.[0] ?? {};
+      const name = (ES[cat.categoryName] ?? cat.categoryName ?? "objeto").toUpperCase();
+      const s = Math.round((cat.score ?? 0) * 100);
+      if (inHand) {
+        ctx.fillStyle = "rgba(255,59,107,.18)"; ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.lineWidth = 3 * u; ctx.strokeStyle = COLORS.obj; ctx.strokeRect(b.x, b.y, b.w, b.h);
+        label(`✋ ${name} · EN MANO`, b.x, b.y - 30 * u, COLORS.obj, u, "#fff");
+      } else {
+        brackets(b, COLORS.obj, u);
+        label(`${name} ${s}%`, b.x, b.y - 30 * u, COLORS.obj, u, "#fff");
+      }
+    });
+  }
+
+  $("count").textContent = `${state.face ? r.face.length : "–"} · ${state.body ? r.pose.length : "–"} · ${state.obj ? r.obj.length : "–"}${held ? " ✋" + held : ""}`;
+}
+
+function brackets(b, color, u) {
+  const L = Math.min(b.w, b.h) * .22;
+  ctx.strokeStyle = color; ctx.lineWidth = 3.5 * u; ctx.lineCap = "square";
+  ctx.beginPath();
+  ctx.moveTo(b.x, b.y + L); ctx.lineTo(b.x, b.y); ctx.lineTo(b.x + L, b.y);
+  ctx.moveTo(b.x + b.w - L, b.y); ctx.lineTo(b.x + b.w, b.y); ctx.lineTo(b.x + b.w, b.y + L);
+  ctx.moveTo(b.x + b.w, b.y + b.h - L); ctx.lineTo(b.x + b.w, b.y + b.h); ctx.lineTo(b.x + b.w - L, b.y + b.h);
+  ctx.moveTo(b.x + L, b.y + b.h); ctx.lineTo(b.x, b.y + b.h); ctx.lineTo(b.x, b.y + b.h - L);
+  ctx.stroke();
+  ctx.lineWidth = 1 * u; ctx.globalAlpha = .35; ctx.strokeRect(b.x, b.y, b.w, b.h); ctx.globalAlpha = 1;
+}
+
+function label(text, x, y, bg, u, fg) {
+  const fs = Math.round(15 * u);
+  ctx.font = `700 ${fs}px ui-monospace, Menlo, Consolas, monospace`;
+  const pad = 7 * u, w = ctx.measureText(text).width + pad * 2, h = fs + pad * 1.6;
+  x = Math.max(0, Math.min(x, canvas.width - w)); y = Math.max(0, y);
+  ctx.fillStyle = bg; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = fg; ctx.textBaseline = "middle"; ctx.fillText(text, x + pad, y + h / 2 + u);
+}
+
+// ---------- Recording ----------
+function pickMime() {
+  if (!window.MediaRecorder) return null;
+  const list = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+  return list.find(m => MediaRecorder.isTypeSupported?.(m)) ?? "";
+}
+
+async function startRecording() {
+  const mime = pickMime();
+  if (mime === null) { alert("Este navegador no permite grabar vídeo."); return; }
+  const out = canvas.captureStream(30);
+  if (state.mic) {
+    try {
+      if (!state.micStream || state.micStream.getAudioTracks()[0]?.readyState !== "live")
+        state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      state.micStream.getAudioTracks().forEach(t => out.addTrack(t));
+    } catch (e) { console.warn("Sin micrófono", e); }
+  }
+  const rec = new MediaRecorder(out, { ...(mime ? { mimeType: mime } : {}), videoBitsPerSecond: 8_000_000 });
+  state.chunks = []; state.mime = rec.mimeType || mime || "video/webm";
+  rec.ondataavailable = e => e.data.size && state.chunks.push(e.data);
+  rec.onstop = showResult;
+  rec.start(500);
+  state.recorder = rec; state.recStart = Date.now();
+  $("btn-rec").classList.add("on"); $("rec").classList.add("on");
+  $("btn-flip").disabled = true;
+}
+
+function stopRecording() {
+  state.recorder?.stop();
+  state.recorder = null;
+  $("btn-rec").classList.remove("on"); $("rec").classList.remove("on");
+  $("btn-flip").disabled = false;
+}
+
+function showResult() {
+  state.blob = new Blob(state.chunks, { type: state.mime });
+  $("preview").src = URL.createObjectURL(state.blob);
+  const mb = (state.blob.size / 1048576).toFixed(1);
+  $("result-info").textContent = `${state.mime.includes("mp4") ? "MP4" : "WEBM"} · ${mb} MB · ${canvas.width}×${canvas.height}`;
+  $("result").classList.add("show");
+}
+
+async function saveResult() {
+  const ext = state.mime.includes("mp4") ? "mp4" : "webm";
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const file = new File([state.blob], `visor-${stamp}.${ext}`, { type: state.mime.split(";")[0] });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+}
+
+function closeResult() {
+  $("result").classList.remove("show");
+  URL.revokeObjectURL($("preview").src); $("preview").removeAttribute("src"); state.blob = null;
+}
+
+// ---------- UI ----------
+function toggle(btn, key) {
+  btn.addEventListener("click", () => {
+    state[key] = !state[key];
+    btn.setAttribute("aria-pressed", state[key]);
+  });
+}
+toggle($("tg-face"), "face"); toggle($("tg-body"), "body"); toggle($("tg-obj"), "obj"); toggle($("btn-mic"), "mic");
+
+$("btn-rec").addEventListener("click", () => state.recorder ? stopRecording() : startRecording());
+$("btn-flip").addEventListener("click", async () => {
+  state.facing = state.facing === "user" ? "environment" : "user";
+  try { await startCamera(); } catch (e) { console.warn(e); }
+});
+$("btn-save").addEventListener("click", saveResult);
+$("btn-discard").addEventListener("click", closeResult);
+
+async function keepAwake() {
+  try { state.wake = await navigator.wakeLock?.request("screen"); } catch {}
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && state.stream) keepAwake(); });
+
+$("btn-start").addEventListener("click", async () => {
+  const btn = $("btn-start");
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    say("La cámara solo funciona si la página se abre por HTTPS.", true); return;
+  }
+  btn.disabled = true;
+  try {
+    say("Pidiendo permiso de cámara…");
+    await startCamera();
+    if (!state.detectors.face) await loadModels();
+    $("start").style.display = "none";
+    keepAwake();
+    requestAnimationFrame(loop);
+  } catch (e) {
+    console.error(e);
+    const denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
+    say(denied ? "Permiso de cámara denegado. Actívalo en los ajustes del navegador." : "Error: " + (e.message || e), true);
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
